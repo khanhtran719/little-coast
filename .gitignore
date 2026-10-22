@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+artifacts/
+
+# Local studio tools and internal coordination
+/game-studio/
+/AGENTS.md
+/docs/production/
+/docs/IMPLEMENTATION_CONTRACT.md
