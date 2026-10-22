@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#e7e7dc" />
+  <title>Little Coast · Mẫu tạo hình 3D</title>
+</head>
+<body>
+  <main class="art-workshop">
+    <header class="workshop-header"><a class="wordmark" href="/">Little Coast <span>↗ Trở về làng</span></a><p>Xưởng tạo hình <span>01 / Mẫu dựng từ concept</span></p></header>
+    <section class="workshop-layout">
+      <div class="viewport-column">
+        <nav class="asset-tabs" aria-label="Chọn mẫu tạo hình"><button data-asset="hai" aria-pressed="true">Bác Hải</button><button data-asset="house" aria-pressed="false">Nhà ngư dân</button><button data-asset="cafe" aria-pressed="false">Quán nước</button><button data-asset="corner" aria-pressed="false">Góc mẫu</button><button data-asset="compare" aria-pressed="false">So lưới & bố cục</button></nav>
+        <div id="comparison-controls" class="comparison-controls" role="group" aria-label="Đối chứng cùng tỷ lệ và ánh sáng" hidden><button data-comparison="baseline" aria-pressed="true">1 · Lưới cũ, nhà thưa</button><button data-comparison="fine" aria-pressed="false">2 · Ô nhỏ, cùng vị trí</button><button data-comparison="compact" aria-pressed="false">3 · Ô nhỏ, nhà sát hơn</button><p>Cùng 2 nhà + 1 quán + 1 mẫu Hải · Đường 3 ô → 2 ô · Sân thử, không thay bản lưu.</p></div>
+        <div class="model-viewport" id="model-viewport" role="img" aria-label="Mẫu 3D có thể xoay bằng chuột"><p id="viewer-loading">Đang mở mẫu 3D…</p></div>
+        <div class="model-label"><div><span class="eyebrow">BẢN DỰNG 3D TRỰC TIẾP</span><h1 id="asset-title">Bác Hải</h1><p id="asset-description"></p></div><p id="asset-counts" class="asset-counts"></p></div>
+        <div class="viewer-controls"><div class="angle-controls" role="group" aria-label="Góc xem"><button data-angle="front">Trước</button><button data-angle="side">Bên</button><button data-angle="back">Sau</button><button data-angle="quarter" aria-pressed="true">3/4</button></div><button id="animate-button" aria-pressed="false">▶ Thử bước đi</button><button id="light-button" aria-pressed="false">☀ Ban ngày</button></div>
+        <p class="viewer-hint">Kéo để xoay · Cuộn để phóng to · Mẫu riêng, không đọc hoặc ghi bản lưu của bạn.</p>
+      </div>
+      <aside class="reference-column"><span class="eyebrow">ĐÍCH THỊ GIÁC / CONCEPT IMAGEGEN</span><h2>Cùng một chất làng.</h2><a id="reference-link" target="_blank" rel="noopener"><img id="reference-image" alt="Ảnh concept để đối chiếu với mẫu 3D" /></a><p id="reference-caption"></p><div class="reference-notes"><h3>Điều cần nhìn thấy</h3><ul id="review-points"></ul></div><p class="scope-note">Mẫu được dựng bằng mesh 3D có khớp chuyển động trong Three.js. Chưa phải model điêu khắc, skin rig hoặc bộ animation cuối; chi tiết được giản lược theo camera game.</p></aside>
+    </section>
+  </main>
+  <script type="module" src="/src/art-review.js"></script>
+</body>
+</html>

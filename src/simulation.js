@@ -1,5 +1,6 @@
-/** Deterministic, serializable world model. All coordinates use the same x/z grid as rendering. */
-export const MAP = Object.freeze({width:22,depth:16,regionStart:14,anchor:Object.freeze({x:0,z:7})});
+/** Building anchors are fine cells; resident coordinates are physical world units. */
+import {MAP,CELL_SIZE,cellToWorld,worldToCell,footprint,occupiedCells,buildingCenter,roadStroke} from './grid.js';
+export {MAP};
 export const CATALOG = Object.freeze({
  house:{name:'Nhà ngư dân',description:'Thêm 2 chỗ ở. Có đường nối làng mới đón cư dân.',capacity:2},
  road:{name:'Đường dân sinh',description:'Nối công trình tới lối vào làng và tạo tuyến đi bộ.'},
@@ -22,19 +23,34 @@ function journal(w,text,kind='event'){
  w.journal.push({id:freshId(w,'j'),text,time:w.time,kind});
  if(w.journal.length>MAX_HISTORY)w.journal.shift();
 }
+const physicalKey=(x,z)=>key(Math.round(x*3+1),Math.round(z*3+1));
+const near=(a,b)=>Math.abs(a-b)<1e-7;
 function graph(w){
- const roads=new Map(w.buildings.filter(b=>b.type==='road').map(b=>[key(b.x,b.z),b]));
- const connected=new Set();const pending=[MAP.anchor];
- for(let i=0;i<pending.length;i++){
-  const p=pending[i],k=key(p.x,p.z);if(connected.has(k)||!roads.has(k))continue;
-  connected.add(k);for(const [dx,dz] of directions)pending.push({x:p.x+dx,z:p.z+dz});
- }
+ const roads=new Map();for(const b of w.buildings.filter(b=>b.type==='road'))for(const p of occupiedCells(b))roads.set(key(p.x,p.z),{x:cellToWorld(p.x),z:cellToWorld(p.z),cx:p.x,cz:p.z,building:b});
+ const connected=new Set(),pending=[MAP.anchor];
+ for(let i=0;i<pending.length;i++){const p=pending[i],k=key(p.x,p.z);if(connected.has(k)||!roads.has(k))continue;connected.add(k);for(const[dx,dz]of directions)pending.push({x:p.x+dx,z:p.z+dz});}
  return {roads,connected};
 }
-function adjacentRoads(b,g,connectedOnly=true){return directions.map(([dx,dz])=>g.roads.get(key(b.x+dx,b.z+dz))).filter(r=>r&&(!connectedOnly||g.connected.has(key(r.x,r.z))));}
+function adjacentRoads(b,g,connectedOnly=true){
+ const owned=new Set(occupiedCells(b).map(p=>key(p.x,p.z))),entries=new Map();
+ for(const p of occupiedCells(b))for(const[dx,dz]of directions){const k=key(p.x+dx,p.z+dz),r=g.roads.get(k);if(!owned.has(k)&&r&&(!connectedOnly||g.connected.has(k)))entries.set(k,r);}
+ return [...entries.values()];
+}
+function validDestination(b,n,g){
+ if(!near(n.targetX*3,Math.round(n.targetX*3))||!near(n.targetZ*3,Math.round(n.targetZ*3)))return false;
+ const k=physicalKey(n.targetX,n.targetZ),road=g.roads.get(k);if(!road)return false;
+ const entries=adjacentRoads(b,g,false);
+ return entries.some(p=>physicalKey(p.x,p.z)===k || (road.building.roadWidth===3&&p.building.id===road.building.id));
+}
+function segmentSupported(a,b,g){
+ if(!near(a.x,b.x)&&!near(a.z,b.z))return false;
+ const dx=b.x-a.x,dz=b.z-a.z,distance=Math.abs(dx)+Math.abs(dz),steps=Math.max(1,Math.ceil(distance*6));
+ for(let i=0;i<=steps;i++)if(!supported({x:a.x+dx*i/steps,z:a.z+dz*i/steps},g))return false;
+ return true;
+}
 export function isConnected(w,building){
  const b=findBuilding(w,building);if(!b)return false;const g=graph(w);
- return b.type==='road'?g.connected.has(key(b.x,b.z)):adjacentRoads(b,g).length>0;
+ return b.type==='road'?occupiedCells(b).some(p=>g.connected.has(key(p.x,p.z))):adjacentRoads(b,g).length>0;
 }
 export function stats(w){
  const g=graph(w),houses=w.buildings.filter(b=>b.type==='house'),houseMap=new Map(houses.map(b=>[b.id,b]));
@@ -60,60 +76,67 @@ function makeResident(w,id,name,home,index){
  return {id,name,homeId:home.id,state:'housed',x:road.x,z:road.z,targetX:road.x,targetZ:road.z,activity:'idle',route:[],targetBuildingId:null,activityUntil:w.time+index*2,journeyCount:index,memories:[],named:id==='hai',protectionTime:0};
 }
 export function createWorld(){
- const w={version:1,id:'little-coast-local',revision:0,nextId:1,time:480,mode:'living',weather:'sunny',buildings:[],residents:[],journal:[],regionUnlocked:false,lastArrivalTime:480,arrivalDay:0,arrivalsToday:0,milestoneRoadUsed:false,ambient:false,lastDepartureDay:-1,lastReentryTime:480};
- const seed=(type,x,z)=>{const b={id:freshId(w,'b'),type,x,z,rotation:0,createdBy:'seed'};w.buildings.push(b);return b;};
- const homes=[seed('house',5,6),seed('house',8,6)];
- for(let x=0;x<=12;x++)seed('road',x,7);
- for(let z=8;z<=14;z++)seed('road',11,z);
- seed('pier',11,15);seed('market',12,11);
+ const w={version:2,id:'little-coast-local',revision:0,nextId:1,time:480,mode:'living',weather:'sunny',buildings:[],residents:[],journal:[],regionUnlocked:false,lastArrivalTime:480,arrivalDay:0,arrivalsToday:0,milestoneRoadUsed:false,ambient:false,lastDepartureDay:-1,lastReentryTime:480};
+ const seed=(type,x,z,extra={})=>{const b={id:freshId(w,'b'),type,x,z,rotation:0,createdBy:'seed',...extra};w.buildings.push(b);return b;};
+ const homes=[seed('house',15,18),seed('house',19,18)];
+ seed('road',0,21,{roadWidth:2,cells:roadStroke({x:0,z:21},{x:36,z:21}).map(p=>({x:p.x,z:p.z-21}))});
+ seed('road',33,23,{roadWidth:2,cells:roadStroke({x:33,z:23},{x:33,z:43}).map(p=>({x:p.x-33,z:p.z-23}))});
+ seed('pier',33,45);seed('market',35,33);
  w.residents=[makeResident(w,'hai','Bác Hải',homes[0],0),makeResident(w,'lan','Cô Lan',homes[0],1),makeResident(w,'minh','Anh Minh',homes[1],2),makeResident(w,'an','Chị An',homes[1],3)];
- journal(w,'Làng Chài bắt đầu một buổi sáng với bốn cư dân và bến cá đã có từ trước.','seed');
- return w;
+ journal(w,'Làng Chài bắt đầu một buổi sáng với bốn cư dân và bến cá đã có từ trước.','seed');return w;
 }
-export function canPlace(w,type,x,z,ignoreId=null){
- if(!validType(type))return result(false,'Loại công trình không hợp lệ.');
- if(!Number.isInteger(x)||!Number.isInteger(z)||x<0||x>=MAP.width||z<0||z>=MAP.depth)return result(false,'Chọn một ô đất trong bản đồ.');
- if(!w.regionUnlocked&&x>=MAP.regionStart)return result(false,'Xóm Biển chưa mở.');
- if(type==='pier'&&z!==MAP.depth-1)return result(false,'Bến cá cần đặt sát bờ biển.');
- if(w.buildings.some(b=>b.id!==ignoreId&&b.x===x&&b.z===z))return result(false,'Ô đất này đã có công trình.');
+function checkCells(w,cells,type,ignoreId=null,allowRoadOverlap=false){
+ if(!cells.length||cells.some(p=>!Number.isSafeInteger(p.x)||!Number.isSafeInteger(p.z)||p.x<0||p.z<0||p.x>=MAP.width||p.z>=MAP.depth))return result(false,'Toàn bộ công trình cần nằm trong bản đồ.');
+ if(!w.regionUnlocked&&cells.some(p=>p.x>=MAP.regionStart))return result(false,'Xóm Biển chưa mở.');
+ if(type==='pier'&&Math.max(...cells.map(p=>p.z))!==MAP.depth-1)return result(false,'Bến cá cần đặt sát bờ biển.');
+ const requested=new Set(cells.map(p=>key(p.x,p.z)));
+ for(const b of w.buildings){if(b.id===ignoreId||allowRoadOverlap&&b.type==='road')continue;if(occupiedCells(b).some(p=>requested.has(key(p.x,p.z))))return result(false,'Phần đất này đã có công trình.');}
  return result(true,'Có thể đặt.');
+}
+export function canPlace(w,type,x,z,ignoreId=null,rotation=0){
+ if(!validType(type)||!Number.isSafeInteger(x)||!Number.isSafeInteger(z)||!validRotation(rotation))return result(false,'Loại, vị trí hoặc góc xoay không hợp lệ.');
+ const original=ignoreId?w.buildings.find(b=>b.id===ignoreId):null;
+ return checkCells(w,occupiedCells({...original,type,x,z,rotation}),type,ignoreId);
 }
 const validRotation=r=>Number.isInteger(r)&&r>=0&&r<=3;
 function supported(n,g){
- const fx=Math.floor(n.x),cx=Math.ceil(n.x),fz=Math.floor(n.z),cz=Math.ceil(n.z);
- return (Number.isInteger(n.x)&&g.roads.has(key(n.x,fz))&&g.roads.has(key(n.x,cz)))||(Number.isInteger(n.z)&&g.roads.has(key(fx,n.z))&&g.roads.has(key(cx,n.z)));
+ const fx=n.x*3+1,fz=n.z*3+1,ix=Math.round(fx),iz=Math.round(fz);
+ if(near(fx,ix))return g.roads.has(key(ix,Math.floor(fz+1e-7)))&&g.roads.has(key(ix,Math.ceil(fz-1e-7)));
+ if(near(fz,iz))return g.roads.has(key(Math.floor(fx+1e-7),iz))&&g.roads.has(key(Math.ceil(fx-1e-7),iz));
+ return false;
 }
 function resetTravel(w){
  const g=graph(w),roads=[...g.roads.values()];
  for(const n of w.residents){
   let shifted=false;
-  if(!supported(n,g)&&roads.length){
-   const nearest=roads.reduce((best,b)=>!best||Math.hypot(n.x-b.x,n.z-b.z)<Math.hypot(n.x-best.x,n.z-best.z)?b:best,null);
-   n.x=nearest.x;n.z=nearest.z;shifted=true;
-  }
-  const destination=findBuilding(w,n.targetBuildingId);
-  const routeValid=n.route.every(p=>g.roads.has(key(p.x,p.z))&&g.connected.has(key(p.x,p.z)));
-  const destinationValid=!n.targetBuildingId||(destination&&Math.abs(destination.x-n.targetX)+Math.abs(destination.z-n.targetZ)===1&&isConnected(w,destination));
+  if(!supported(n,g)&&roads.length){const nearest=roads.reduce((best,b)=>!best||Math.hypot(n.x-b.x,n.z-b.z)<Math.hypot(n.x-best.x,n.z-best.z)?b:best,null);n.x=nearest.x;n.z=nearest.z;shifted=true;}
+  let last=n;const routeValid=n.route.every(p=>{const ok=g.connected.has(physicalKey(p.x,p.z))&&segmentSupported(last,p,g);last=p;return ok;});
+  const destination=findBuilding(w,n.targetBuildingId),destinationValid=!n.targetBuildingId||(destination&&validDestination(destination,n,g)&&isConnected(w,destination));
   if(!shifted&&routeValid&&destinationValid)continue;
-  const between=!Number.isInteger(n.x)||!Number.isInteger(n.z);
-  // If the current road segment still exists, finish only that segment before replanning.
-  const endpoint=between&&supported(n,g)?roads.filter(r=>(r.x===n.x||r.z===n.z)&&Math.abs(n.x-r.x)+Math.abs(n.z-r.z)<1).sort((a,b)=>Math.hypot(n.x-a.x,n.z-a.z)-Math.hypot(n.x-b.x,n.z-b.z))[0]:null;
-  n.route=endpoint?[{x:endpoint.x,z:endpoint.z}]:[];n.targetBuildingId=null;
-  n.targetX=endpoint?endpoint.x:Math.round(n.x);n.targetZ=endpoint?endpoint.z:Math.round(n.z);
-  n.activity=endpoint?'walking':'idle';n.activityUntil=w.time;
+  const endpoint=!shifted&&supported(n,g)?roads.filter(r=>(near(r.x,n.x)||near(r.z,n.z))&&Math.abs(n.x-r.x)+Math.abs(n.z-r.z)<=CELL_SIZE+1e-7&&segmentSupported(n,r,g)).sort((a,b)=>Math.hypot(n.x-a.x,n.z-a.z)-Math.hypot(n.x-b.x,n.z-b.z))[0]:null;
+  const needsStep=endpoint&&!near(Math.abs(n.x-endpoint.x)+Math.abs(n.z-endpoint.z),0);
+  n.route=needsStep?[{x:endpoint.x,z:endpoint.z}]:[];n.targetBuildingId=null;n.targetX=needsStep?endpoint.x:n.x;n.targetZ=needsStep?endpoint.z:n.z;n.activity=needsStep?'walking':'idle';n.activityUntil=w.time;
  }
 }
 export function place(w,type,x,z,rotation=0){
- const check=canPlace(w,type,x,z);if(!check.ok)return check;if(!validRotation(rotation))return result(false,'Góc xoay không hợp lệ.');
- const building={id:freshId(w,'b'),type,x,z,rotation,createdBy:'player'};w.buildings.push(building);if(type==='road')resetTravel(w);w.revision++;
+ const check=canPlace(w,type,x,z,null,rotation);if(!check.ok)return check;
+ const building={id:freshId(w,'b'),type,x,z,rotation,createdBy:'player',...(type==='road'?{roadWidth:2}:{})};w.buildings.push(building);if(type==='road')resetTravel(w);w.revision++;
  return result(true,`${CATALOG[type].name} đã đặt. ${buildingStatus(w,building).label}.`,building);
+}
+export function canPlaceRoad(w,from,to){return checkCells(w,roadStroke(from,to),'road',null,true);}
+export function placeRoad(w,from,to){
+ const cells=roadStroke(from,to),check=checkCells(w,cells,'road',null,true);if(!check.ok)return check;
+ const existing=new Set(w.buildings.filter(b=>b.type==='road').flatMap(occupiedCells).map(p=>key(p.x,p.z)));
+ const added=cells.filter(p=>!existing.has(key(p.x,p.z)));if(!added.length)return result(true,'Đoạn này đã có đường.');
+ const x=Math.min(...added.map(p=>p.x)),z=Math.min(...added.map(p=>p.z));
+ const building={id:freshId(w,'b'),type:'road',x,z,rotation:0,roadWidth:2,cells:added.map(p=>({x:p.x-x,z:p.z-z})),createdBy:'player'};
+ w.buildings.push(building);resetTravel(w);w.revision++;return result(true,'Đã vẽ đường rộng 2 ô.',building);
 }
 export function move(w,id,x,z,rotation=0){
  const building=typeof id==='string'?findBuilding(w,id):null;if(!building)return result(false,'Không tìm thấy công trình.');
- const check=canPlace(w,building.type,x,z,id);if(!check.ok)return check;if(!validRotation(rotation))return result(false,'Góc xoay không hợp lệ.');
+ const check=canPlace(w,building.type,x,z,id,rotation);if(!check.ok)return check;
  if(building.x===x&&building.z===z&&building.rotation===rotation)return result(true,'Công trình vẫn ở vị trí cũ.',building);
- Object.assign(building,{x,z,rotation});resetTravel(w);w.revision++;
- return result(true,'Đã chuyển; giữ nguyên công trình và cư dân.',building);
+ Object.assign(building,{x,z,rotation});resetTravel(w);w.revision++;return result(true,'Đã chuyển; giữ nguyên công trình và cư dân.',building);
 }
 export function remove(w,id){
  const building=typeof id==='string'?findBuilding(w,id):null;if(!building)return result(false,'Không tìm thấy công trình.');
@@ -158,16 +181,19 @@ function allocate(w){
  w.lastArrivalTime=w.time;w.arrivalsToday++;journal(w,'Một cư dân mới chuyển đến nhà trống có đường nối làng.','arrival');
 }
 function routeBetween(g,start,end){
- const startKey=key(start.x,start.z),endKey=key(end.x,end.z);if(!g.roads.has(startKey)||!g.roads.has(endKey))return null;
- const queue=[start],parents=new Map([[startKey,null]]);let found=false;
- for(let i=0;i<queue.length;i++){const p=queue[i],k=key(p.x,p.z);if(k===endKey){found=true;break;}
-  for(const [dx,dz]of directions){const q={x:p.x+dx,z:p.z+dz},qk=key(q.x,q.z);if(g.connected.has(qk)&&!parents.has(qk)){parents.set(qk,p);queue.push(q);}}
+ const endKey=physicalKey(end.x,end.z),queue=[],parents=new Map();
+ if(!g.roads.has(endKey))return null;
+ for(const r of g.roads.values())if(Math.abs(r.x-start.x)+Math.abs(r.z-start.z)<=CELL_SIZE+1e-7&&segmentSupported(start,r,g)){const k=physicalKey(r.x,r.z);queue.push(r);parents.set(k,null);}
+ let found=false;
+ for(let i=0;i<queue.length;i++){const p=queue[i],k=physicalKey(p.x,p.z);if(k===endKey){found=true;break;}
+  for(const[dx,dz]of directions){const qk=key(p.cx+dx,p.cz+dz);if(g.connected.has(qk)&&!parents.has(qk)){parents.set(qk,k);queue.push(g.roads.get(qk));}}
  }
- if(!found)return null;const path=[];let p=end;while(key(p.x,p.z)!==startKey){path.unshift({x:p.x,z:p.z});p=parents.get(key(p.x,p.z));}return path;
+ if(!found)return null;const path=[];let k=endKey;while(k!==null){const p=g.roads.get(k);path.unshift({x:p.x,z:p.z});k=parents.get(k);}
+ if(path.length&&near(path[0].x,start.x)&&near(path[0].z,start.z))path.shift();return path;
 }
 function remember(n,memory){if(!n.memories.some(m=>m.kind===memory.kind&&m.buildingId===memory.buildingId)){n.memories.push(memory);if(n.memories.length>64)n.memories.shift();}}
 function roadUsed(w,n,p,g){
- const b=g.roads.get(key(p.x,p.z));if(!b||b.createdBy!=='player')return;
+ const b=g.roads.get(physicalKey(p.x,p.z))?.building;if(!b||b.createdBy!=='player')return;
  remember(n,{kind:'road',buildingId:b.id,type:'road',text:`Đã đi qua lối tại (${b.x}, ${b.z}).`,time:w.time});
  if(!w.milestoneRoadUsed){w.milestoneRoadUsed=true;journal(w,`${n.name} đã thực sự đi qua một lối mới bạn đặt.`,'first-road-use');}
 }
@@ -191,7 +217,7 @@ function arrive(w,n){
 function walk(w,n,seconds,g){
  let remaining=seconds*SPEED;
  while(n.route.length&&remaining>0){
-  const p=n.route[0];if(!g.roads.has(key(p.x,p.z))){n.route=[];n.activity='idle';n.targetBuildingId=null;return;}
+  const p=n.route[0];if(!g.roads.has(physicalKey(p.x,p.z))){n.route=[];n.activity='idle';n.targetBuildingId=null;return;}
   const distance=Math.abs(p.x-n.x)+Math.abs(p.z-n.z);
   if(distance<=remaining+1e-9){n.x=p.x;n.z=p.z;remaining-=distance;n.route.shift();roadUsed(w,n,p,g);}
   else{const ratio=remaining/distance;n.x+=(p.x-n.x)*ratio;n.z+=(p.z-n.z)*ratio;remaining=0;}
@@ -245,17 +271,23 @@ export function validateWorld(w){
  const cell=(x,z)=>integer(x,0,MAP.width-1)&&integer(z,0,MAP.depth-1);
  const ids=new Set();let largest=0;
  const id=s=>{if(!string(s,100)||ids.has(s))fail('định danh trùng hoặc sai');ids.add(s);const match=/^(?:b|j|npc)-(\d+)$/.exec(s);if(match)largest=Math.max(largest,Number(match[1]));};
- if(!plain(w)||w.version!==1||!string(w.id,100)||!integer(w.revision)||!integer(w.nextId,1)||!finite(w.time,480)||!['living','slow','pause'].includes(w.mode)||!['sunny','cloudy','rain'].includes(w.weather)||typeof w.regionUnlocked!=='boolean'||typeof w.ambient!=='boolean'||!integer(w.lastDepartureDay,-1,Math.floor(w.time/DAY)))fail('thông tin thế giới');
+ if(!plain(w)||w.version!==2||!string(w.id,100)||!integer(w.revision)||!integer(w.nextId,1)||!finite(w.time,480)||!['living','slow','pause'].includes(w.mode)||!['sunny','cloudy','rain'].includes(w.weather)||typeof w.regionUnlocked!=='boolean'||typeof w.ambient!=='boolean'||!integer(w.lastDepartureDay,-1,Math.floor(w.time/DAY)))fail('thông tin thế giới');
  if((own(w,'lastReentryTime')&&!finite(w.lastReentryTime,480,w.time))||!finite(w.lastArrivalTime,480,w.time)||!integer(w.arrivalDay,0,Math.floor(w.time/DAY))||!integer(w.arrivalsToday,0,2)||typeof w.milestoneRoadUsed!=='boolean')fail('sổ lượt cư dân');
  if(!Array.isArray(w.buildings)||w.buildings.length>MAP.width*MAP.depth||!Array.isArray(w.residents)||w.residents.length>200||!Array.isArray(w.journal)||w.journal.length>MAX_HISTORY)fail('danh sách quá lớn hoặc sai');
  const occupied=new Set(),buildings=new Map();
  for(const b of w.buildings){
-  if(!plain(b)||!validType(b.type)||!cell(b.x,b.z)||!validRotation(b.rotation)||!['seed','player'].includes(b.createdBy)||(!w.regionUnlocked&&b.x>=MAP.regionStart)||(b.type==='pier'&&b.z!==15))fail('công trình');
-  id(b.id);const k=key(b.x,b.z);if(occupied.has(k))fail('công trình chồng nhau');occupied.add(k);buildings.set(b.id,b);
+  if(!plain(b)||!validType(b.type)||!cell(b.x,b.z)||!validRotation(b.rotation)||!['seed','player'].includes(b.createdBy))fail('công trình');
+  if(own(b,'footprint')||b.type!=='road'&&(own(b,'cells')||own(b,'roadWidth')))fail('footprint không hợp lệ');
+  if(b.type==='road'){
+   if(![2,3].includes(b.roadWidth))fail('chiều rộng đường');
+   if(own(b,'cells')&&(!Array.isArray(b.cells)||!b.cells.length||b.cells.length>MAP.width*MAP.depth||b.cells.some(p=>!plain(p)||!cell(p.x,p.z))||Math.min(...b.cells.map(p=>p.x))!==0||Math.min(...b.cells.map(p=>p.z))!==0))fail('hình đường');
+  }
+  const cells=occupiedCells(b);if(new Set(cells.map(p=>key(p.x,p.z))).size!==cells.length||!checkCells({...w,buildings:[]},cells,b.type).ok)fail('footprint');
+  id(b.id);for(const p of cells){const k=key(p.x,p.z);if(occupied.has(k))fail('công trình chồng nhau');occupied.add(k);}buildings.set(b.id,b);
  }
  const g=graph(w),homeCount=new Map();
  for(const n of w.residents){
-  if(!plain(n)||!string(n.name,100)||!['housed','waiting','atRisk','departureEligible','departed','temporarilyAway'].includes(n.state)||!finite(n.x,0,21)||!finite(n.z,0,15)||!cell(n.targetX,n.targetZ)||!['idle','walking','house','cafe','bench','market','pier'].includes(n.activity)||!finite(n.activityUntil)||!integer(n.journeyCount)||typeof n.named!=='boolean'||!finite(n.protectionTime,0,DAY)||!Array.isArray(n.route)||n.route.length>MAP.width*MAP.depth||!Array.isArray(n.memories)||n.memories.length>64)fail('cư dân');
+  if(!plain(n)||!string(n.name,100)||!['housed','waiting','atRisk','departureEligible','departed','temporarilyAway'].includes(n.state)||!finite(n.x,-1/3,64/3)||!finite(n.z,-1/3,46/3)||!finite(n.targetX,-1/3,64/3)||!finite(n.targetZ,-1/3,46/3)||!['idle','walking','house','cafe','bench','market','pier'].includes(n.activity)||!finite(n.activityUntil)||!integer(n.journeyCount)||typeof n.named!=='boolean'||!finite(n.protectionTime,0,DAY)||!Array.isArray(n.route)||n.route.length>MAP.width*MAP.depth||!Array.isArray(n.memories)||n.memories.length>64)fail('cư dân');
   id(n.id);
   if(n.activity==='walking'&&!n.route.length)fail('đi bộ thiếu tuyến');
   if(['departureEligible','departed','temporarilyAway'].includes(n.state)&&n.protectionTime<DAY)fail('chưa hết bảo vệ');
@@ -269,9 +301,9 @@ export function validateWorld(w){
   if(!g.roads.size){if(n.route.length)fail('tuyến không có đường');}
   else if(!supported(n,g))fail('cư dân đứng ngoài đường');
   let p={x:n.x,z:n.z};
-  for(const q of n.route){if(!plain(q)||!cell(q.x,q.z)||!g.roads.has(key(q.x,q.z))||Math.abs(q.x-p.x)+Math.abs(q.z-p.z)>1.0000001||(q.x!==p.x&&q.z!==p.z))fail('tuyến đi không hợp lệ');p=q;}
-  if(n.route.length&&(n.activity!=='walking'||(!n.targetBuildingId&&n.route.length!==1)||p.x!==n.targetX||p.z!==n.targetZ))fail('đích tuyến đi');
-  if(n.targetBuildingId){const b=buildings.get(n.targetBuildingId);if(Math.abs(b.x-n.targetX)+Math.abs(b.z-n.targetZ)!==1)fail('lối vào đích');}
+  for(const q of n.route){if(!plain(q)||!Number.isFinite(q.x)||!Number.isFinite(q.z)||!g.roads.has(physicalKey(q.x,q.z))||!near(q.x*3,Math.round(q.x*3))||!near(q.z*3,Math.round(q.z*3))||Math.abs(q.x-p.x)+Math.abs(q.z-p.z)>CELL_SIZE+1e-7||!segmentSupported(p,q,g))fail('tuyến đi không hợp lệ');p=q;}
+  if(n.route.length&&(n.activity!=='walking'||(!n.targetBuildingId&&(n.route.some(q=>!near(q.x,n.x))&&n.route.some(q=>!near(q.z,n.z))||Math.abs(n.targetX-n.x)+Math.abs(n.targetZ-n.z)>1+1e-7))||p.x!==n.targetX||p.z!==n.targetZ))fail('đích tuyến đi');
+  if(n.targetBuildingId){const b=buildings.get(n.targetBuildingId);if(!validDestination(b,n,g))fail('lối vào đích');}
   for(const m of n.memories){if(!plain(m)||!['road','visit','interaction'].includes(m.kind)||!string(m.text)||!finite(m.time,480,w.time)||(m.kind!=='interaction'&&(!string(m.buildingId,100)||!validType(m.type)||(buildings.has(m.buildingId)&&buildings.get(m.buildingId).type!==m.type))))fail('ký ức');}
  }
  for(const e of w.journal){if(!plain(e)||!string(e.text,1000)||!finite(e.time,480,w.time)||!string(e.kind,100))fail('nhật ký');id(e.id);}

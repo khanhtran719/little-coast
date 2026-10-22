@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { createSaveStore, encodeSave, decodeSave, openStorage } from '../src/persistence.js';
 
 const validate = value => {
-  if (value?.version !== 1 || !Number.isFinite(value.time) || !Array.isArray(value.buildings)) throw new Error('Invalid world');
+  if (value?.version !== 2 || !Number.isFinite(value.time) || !Array.isArray(value.buildings)) throw new Error('Invalid world');
   return value;
 };
-const fixture = time => ({ version: 1, time, buildings: [], revision: time });
+const fixture = time => ({ version: 2, time, buildings: [], revision: time });
 function storage() {
   const data = new Map();
   return { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), data };
